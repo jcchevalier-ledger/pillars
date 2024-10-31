@@ -1,147 +1,21 @@
-name: Release
-concurrency: Release
+name: Publish Atlas API
+
 on:
-  push:
-    branches: [main]
-    tags: ["v*"]
   workflow_dispatch:
+  push:
+    tags:
+      - v*
+
+env:
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
 jobs:
-  release:
-    name: 🚀 Release
-    runs-on: ubuntu-22.04
-    steps:
-      - name: ⬇️ Checkout project
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          fetch-tags: true
-
-      - name: ☕ Install JDK 21
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: 21
-          cache: sbt
-
-      - name: 📦 Install gnupg
-        run: sudo apt update && sudo apt install -y gnupg
-
-      - name: 🔑 Import PGP secret
-        run: echo "${{ secrets.PGP_SECRET }}" | base64 --decode | gpg --batch --import
-
-      - name: 👻 Cache SBT
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.sbt
-            ~/.coursier
-          key: ${{ runner.os }}-sbt-${{ hashfiles('**/build.sbt', 'project/plugins.sbt', 'project/Dependencies.scala') }}
-
-      - name: 🔖 Create version tag
-        run: sbt +test ciReleaseTagNextVersion
-
-      - name: 🔄 Refresh version tag
-        run: git pull --tags
-
-      - name: 🏷️ Retrieve version tag
-        id: version
-        run: |
-          PILLARS_VERSION="$(git ls-remote --tags $REPO | awk -F"/" '{print $3}' | grep '^v[0-9]*\.[0-9]*\.[0-9]*' | grep -v {} | sort --version-sort | tail -n1)"
-          echo "latest version is [$PILLARS_VERSION]"
-          echo "version=$PILLARS_VERSION" >> "$GITHUB_OUTPUT"
-
-      - name: 📝 Update CHANGELOG
-        id: changelog
-        uses: requarks/changelog-action@v1
-        with:
-          token: ${{ github.token }}
-          tag: ${{ steps.version.outputs.version }}
-
-      - name: ✍️ Commit CHANGELOG.md
-        uses: stefanzweifel/git-auto-commit-action@v5
-        with:
-          branch: main
-          commit_message: 'docs: update CHANGELOG.md for ${{ steps.version.outputs.version }} [skip ci]'
-          file_pattern: 'CHANGELOG.md docToolchainConfig.groovy'
-
-      - name: 🏷️ Move tag to HEAD
-        run: git tag -f ${{ steps.version.outputs.version }} && git push origin ${{ steps.version.outputs.version }} --force
-
-      - name: 📦 Create Release
-        uses: ncipollo/release-action@v1.14.0
-        with:
-          allowUpdates: true
-          draft: false
-          makeLatest: true
-          name: ${{ steps.version.outputs.version }}
-          tag: ${{ steps.version.outputs.version }}
-          body: ${{ steps.changelog.outputs.changes }}
-          token: ${{ github.token }}
-
-      - name: 📤 Publish to Sonatype
-        run: sbt ciReleaseSonatype
-        env:
-          SONATYPE_PASSWORD: ${{ secrets.SONATYPE_PASSWORD }}
-          SONATYPE_USERNAME: ${{ secrets.SONATYPE_USERNAME }}
-
-  website:
-    name: 🌐 Publish website
+  build:
+    name: Clone & Publish
     runs-on: ubuntu-latest
-    needs:
-      - release
-    permissions:
-      contents: write
-    concurrency:
-      group: ${{ github.workflow }}-${{ github.ref }}
-    env:
-      DTC_HEADLESS: true
+
     steps:
-      - name: ⬇️ Checkout project
+      - name: Clone
         uses: actions/checkout@v4
 
-      - name: 🔧 Setup
-        run: chmod +x dtcw
-
-      - name: ☕ Install JDK 19
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: 17
-
-      - name: 🧰 Install docToolchain
-        run: ./dtcw local install doctoolchain
-
-      - name: 📦 Cache SBT
-        uses: actions/cache@v4
-        with:
-          path: |
-            .ivy2
-            .sbt
-          key: pillars-cache-${{ hashFiles('build.sbt', 'plugins.sbt') }}
-          restore-keys: |
-            pillars-cache-${{ hashFiles('build.sbt', 'plugins.sbt') }}
-
-      - name: 📊 Get latest version
-        id: version
-        run: |
-          PILLARS_VERSION="$(git ls-remote --tags $REPO | awk -F"/" '{print $3}' | grep '^v[0-9]*\.[0-9]*\.[0-9]*' | grep -v {} | sort --version-sort | tail -n1)"
-          echo "latest version is [$PILLARS_VERSION]"
-          echo "version=${PILLARS_VERSION#v}" >> "$GITHUB_OUTPUT"
-
-      - name: 📝 Generate site
-        run: ./dtcw local generateSite && sbt unidoc
-        env:
-          PILLARS_VERSION: ${{ steps.version.outputs.version }}
-          DTC_HEADLESS: true
-
-      - name: 📄 Copy to public
-        run: cp -r ./target/microsite/output ./public
-
-      - name: 🚀 Deploy
-        uses: peaceiris/actions-gh-pages@v4
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./public
-          cname: pillars.dev
-          enable_jekyll: false
-
+      - run: sbt publish
